@@ -367,6 +367,8 @@
     /**
      * 删除单张图片：从 GitHub 仓库 DELETE，同时从 localStorage 移除
      * 上传时有 sha → 直接用；旧历史记录没有 sha → 先 GET 拿
+     * 旧历史记录没有 filename → 从 raw URL 里解析
+     * 文件已被删（404）→ 静默清理 localStorage 对应条目
      */
     window.deleteFile = async function(idx) {
       const token = localStorage.getItem('gh_token');
@@ -374,20 +376,48 @@
       const hist = JSON.parse(localStorage.getItem('upload_history') || '[]');
       const item = hist[idx];
       if (!item) return;
+
+      // 从 URL 解析 filename（旧历史记录没有存）
+      let filename = item.filename;
+      if (!filename && item.url) {
+        // raw URL: https://raw.githubusercontent.com/owner/repo/main/images/xxx.png
+        const m = item.url.match(/\/(images\/[^/?#]+)/);
+        if (m) filename = m[1];
+      }
+      if (!filename) {
+        showError('无法确定文件路径，请重新上传');
+        return;
+      }
+
       if (!confirm(`确定删除 ${item.name}？\n将从 GitHub 仓库永久删除，不可恢复。`)) return;
 
       try {
         let sha = item.sha;
         if (!sha) {
-          const res = await fetch(`${API_BASE}/${item.filename}`, { headers: { Authorization: `Bearer ${token}` } });
+          const res = await fetch(`${API_BASE}/${filename}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (res.status === 404) {
+            // 文件已被删掉 → 清理 localStorage 即可
+            hist.splice(idx, 1);
+            localStorage.setItem('upload_history', JSON.stringify(hist));
+            renderHistory();
+            showSuccess('文件已不存在，已从本地记录清除');
+            return;
+          }
           if (!res.ok) throw new Error('获取文件 SHA 失败: ' + res.status);
           sha = (await res.json()).sha;
         }
-        const delRes = await fetch(`${API_BASE}/${item.filename}`, {
+        const delRes = await fetch(`${API_BASE}/${filename}`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: `delete: ${item.name}`, sha, branch: REPO_BRANCH }),
         });
+        if (delRes.status === 404) {
+          hist.splice(idx, 1);
+          localStorage.setItem('upload_history', JSON.stringify(hist));
+          renderHistory();
+          showSuccess('文件已不存在，已从本地记录清除');
+          return;
+        }
         if (!delRes.ok) {
           const err = await delRes.json().catch(() => ({}));
           throw new Error(err.message || '删除失败 HTTP ' + delRes.status);
