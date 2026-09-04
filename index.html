@@ -81,7 +81,8 @@
       <div class="history-section">
         <h3>📜 历史上传记录</h3>
         <div id="historyList"></div>
-        <button class="btn-clear" id="btnClear" onclick="clearHistory()">🗑️ 清空记录</button>
+        <button class="btn-clear" style="background:#95a5a6;" id="btnClearLocal" onclick="clearHistory()">🗑️ 只清本地记录</button>
+        <button class="btn-clear" style="background:#c0392b; margin-left:8px;" onclick="clearAllFromGitHub()">🧹 清空仓库所有图片</button>
       </div>
     </div>
   </div>
@@ -203,9 +204,9 @@
         progressFill.textContent = pct + '%';
 
         try {
-          const url = await uploadToGitHub(uploadFile, token);
+          const { filename, sha, url } = await uploadToGitHub(uploadFile, token);
           addResult(uploadFile, url);
-          saveHistory(uploadFile, url);
+          saveHistory(uploadFile, { filename, sha, url });
         } catch (e) {
           showError(uploadFile.name + ': ' + e.message);
         }
@@ -284,7 +285,8 @@
 
       const data = await res.json();
       // raw URL（直链，CDN 加速）
-      return `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${filename}`;
+      const rawUrl = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${filename}`;
+      return { filename, sha: data.content.sha, url: rawUrl };
     }
 
     function addResult(file, url) {
@@ -311,13 +313,15 @@
       });
     }
 
-    // 历史记录
-    function saveHistory(file, url) {
+    // 历史记录（存 sha 和 filename，用于未来删除）
+    function saveHistory(file, info) {
       const hist = JSON.parse(localStorage.getItem('upload_history') || '[]');
       hist.unshift({
         name: file.name,
         size: file.size,
-        url: url,
+        url: info.url,
+        filename: info.filename,  // images/xxx.jpg
+        sha: info.sha,            // GitHub file SHA，用于 DELETE
         time: new Date().toLocaleString('zh-CN'),
       });
       localStorage.setItem('upload_history', JSON.stringify(hist.slice(0, 50)));
@@ -330,21 +334,95 @@
         list.innerHTML = '<div style="color:#ccc;text-align:center;padding:20px;">暂无记录</div>';
         return;
       }
-      list.innerHTML = hist.map(h => `
+      list.innerHTML = hist.map((h, idx) => `
         <div class="history-item">
           <img src="${h.url}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22><rect fill=%22%23ddd%22 width=%2240%22 height=%2240%22/></svg>'">
           <div class="meta">
             <div class="name">${h.name} (${(h.size/1024).toFixed(0)}KB)</div>
-            <div class="url">${h.url}</div>
+            <div class="url" title="${h.filename || ''}">${h.url}</div>
             <div class="time">${h.time}</div>
           </div>
           <button class="btn-copy" onclick="copyUrl('${h.url}')">📋 复制</button>
+          <button class="btn-copy" style="background:#e74c3c; margin-left:6px;" onclick="deleteFile('${idx}')">🗑️ 删除</button>
         </div>
       `).join('');
     }
 
+    /**
+     * 删除单张图片：从 GitHub 仓库 DELETE，同时从 localStorage 移除
+     * 上传时有 sha → 直接用；旧历史记录没有 sha → 先 GET 拿
+     */
+    window.deleteFile = async function(idx) {
+      const token = localStorage.getItem('gh_token');
+      if (!token) { showError('请先输入 GitHub Token'); return; }
+      const hist = JSON.parse(localStorage.getItem('upload_history') || '[]');
+      const item = hist[idx];
+      if (!item) return;
+      if (!confirm(`确定删除 ${item.name}？\n将从 GitHub 仓库永久删除，不可恢复。`)) return;
+
+      try {
+        let sha = item.sha;
+        if (!sha) {
+          const res = await fetch(`${API_BASE}/${item.filename}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (!res.ok) throw new Error('获取文件 SHA 失败: ' + res.status);
+          sha = (await res.json()).sha;
+        }
+        const delRes = await fetch(`${API_BASE}/${item.filename}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: `delete: ${item.name}`, sha, branch: REPO_BRANCH }),
+        });
+        if (!delRes.ok) {
+          const err = await delRes.json().catch(() => ({}));
+          throw new Error(err.message || '删除失败 HTTP ' + delRes.status);
+        }
+        hist.splice(idx, 1);
+        localStorage.setItem('upload_history', JSON.stringify(hist));
+        renderHistory();
+        showError('✅ 已删除 ' + item.name);
+      } catch (e) {
+        showError('删除失败: ' + e.message);
+      }
+    };
+
+    /**
+     * 批量清空：GET images/ 目录全部文件 → 逐个 DELETE → 清空 localStorage
+     */
+    window.clearAllFromGitHub = async function() {
+      const token = localStorage.getItem('gh_token');
+      if (!token) { showError('请先输入 GitHub Token'); return; }
+      if (!confirm('⚠️ 这会删除仓库 images/ 目录下所有上传的图片！\n本地历史记录也会被清空。\n确定继续吗？')) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/images`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error('获取目录列表失败: ' + res.status);
+        const files = await res.json();
+        if (!Array.isArray(files) || !files.length) {
+          showError('仓库里还没有图片');
+          return;
+        }
+        let done = 0, fail = 0;
+        for (const f of files) {
+          try {
+            const delRes = await fetch(`${API_BASE}/images/${f.name}`, {
+              method: 'DELETE',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: `bulk-delete: ${f.name}`, sha: f.sha, branch: REPO_BRANCH }),
+            });
+            if (delRes.ok) done++; else fail++;
+          } catch (e) { fail++; }
+        }
+        localStorage.removeItem('upload_history');
+        renderHistory();
+        showError(`✅ 清空完成：删除 ${done} 张${fail ? ('，失败 ' + fail + ' 张') : ''}`);
+      } catch (e) {
+        showError('清空失败: ' + e.message);
+      }
+    };
+
     function clearHistory() {
-      if (!confirm('确定清空所有历史记录？')) return;
+      // 只清 localStorage 不清 GitHub（批量删用 clearAllFromGitHub）
+      if (!confirm('只清除本地历史记录？仓库里的图片不会删除。')) return;
       localStorage.removeItem('upload_history');
       renderHistory();
     }
