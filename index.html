@@ -59,7 +59,11 @@
     <div class="body">
       <div class="token-section">
         <label>🔑 GitHub Personal Access Token</label>
-        <input type="password" id="tokenInput" placeholder="ghp_xxxx 或 gho_xxxx（需 repo 权限）">
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="password" id="tokenInput" placeholder="ghp_xxxx 或 gho_xxxx（需 repo 权限）" style="flex:1;">
+          <span id="tokenSaveStatus" style="font-size:12px;color:#27ae60;white-space:nowrap;display:none;">✅ 已保存</span>
+          <button type="button" id="btnClearToken" onclick="clearToken()" style="padding:6px 10px;background:#e74c3c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;">🗑️ 忘记</button>
+        </div>
         <div class="hint">Token 只存在你浏览器的 localStorage 中，不上传任何服务器。<br>
         没有 Token？<a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank">点这里创建</a>（勾选 repo 权限）</div>
       </div>
@@ -90,10 +94,34 @@
 
     // 加载已存 token 和历史
     const tokenInput = document.getElementById('tokenInput');
+    const tokenSaveStatus = document.getElementById('tokenSaveStatus');
     tokenInput.value = localStorage.getItem('gh_token') || '';
-    tokenInput.addEventListener('change', () => {
-      localStorage.setItem('gh_token', tokenInput.value.trim());
+    if (tokenInput.value) {
+      tokenSaveStatus.style.display = 'inline';  // 已有 token → 显示 ✅
+    }
+
+    // 失焦时保存（覆盖粘贴、自动填充、手动编辑所有场景）
+    tokenInput.addEventListener('blur', () => saveToken());
+    // 回车也保存
+    tokenInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') saveToken();
     });
+
+    function saveToken() {
+      const v = tokenInput.value.trim();
+      localStorage.setItem('gh_token', v);
+      if (v) {
+        tokenSaveStatus.textContent = '✅ 已保存';
+        tokenSaveStatus.style.display = 'inline';
+      }
+    }
+
+    window.clearToken = function() {
+      if (!confirm('清除已保存的 GitHub Token？')) return;
+      localStorage.removeItem('gh_token');
+      tokenInput.value = '';
+      tokenSaveStatus.style.display = 'none';
+    };
 
     const uploadArea = document.getElementById('uploadArea');
     const fileInput = document.getElementById('fileInput');
@@ -138,6 +166,8 @@
     const COMPRESS_THRESHOLD = 5 * 1024 * 1024;  // 超过 5MB 自动压缩
 
     async function handleFiles(files) {
+      // 上传前强制保存 token（防止粘贴后直接点上传未触发 blur）
+      saveToken();
       const token = tokenInput.value.trim();
       if (!token) { showError('请先输入 GitHub Token'); return; }
       if (!files || !files.length) return;
