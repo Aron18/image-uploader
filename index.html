@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📤 图床上传工具</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .container { background: #fff; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 720px; width: 100%; overflow: hidden; }
+    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 30px 40px; text-align: center; }
+    .header h1 { font-size: 28px; margin-bottom: 8px; }
+    .header p { font-size: 14px; opacity: 0.9; }
+    .body { padding: 30px 40px; }
+    .token-section { background: #f8f9fa; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .token-section label { display: block; font-weight: 600; color: #333; margin-bottom: 8px; font-size: 14px; }
+    .token-section input { width: 100%; padding: 10px 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; font-family: monospace; transition: border-color 0.2s; }
+    .token-section input:focus { outline: none; border-color: #667eea; }
+    .token-section .hint { font-size: 12px; color: #888; margin-top: 6px; }
+    .token-section .hint a { color: #667eea; text-decoration: none; }
+    .upload-area { border: 3px dashed #ccc; border-radius: 16px; padding: 50px 20px; text-align: center; cursor: pointer; transition: all 0.3s; margin-bottom: 20px; }
+    .upload-area:hover { border-color: #667eea; background: #f8f9ff; }
+    .upload-area.dragover { border-color: #667eea; background: #eef0ff; transform: scale(1.02); }
+    .upload-area .icon { font-size: 48px; margin-bottom: 12px; }
+    .upload-area .text { color: #666; font-size: 16px; }
+    .upload-area .shortcut { color: #999; font-size: 13px; margin-top: 8px; }
+    .progress { display: none; margin-bottom: 20px; }
+    .progress.show { display: block; }
+    .progress-bar { background: #e0e0e0; border-radius: 8px; height: 24px; overflow: hidden; }
+    .progress-fill { background: linear-gradient(90deg, #667eea, #764ba2); height: 100%; width: 0%; transition: width 0.3s; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: 600; }
+    .result { display: none; margin-bottom: 20px; }
+    .result.show { display: block; }
+    .result-item { background: #f0f9ff; border: 1px solid #cce8ff; border-radius: 10px; padding: 16px; margin-bottom: 10px; }
+    .result-item img { max-width: 120px; max-height: 120px; border-radius: 8px; margin-right: 14px; vertical-align: middle; }
+    .result-item .info { display: inline-block; vertical-align: middle; }
+    .result-item .url { font-family: monospace; font-size: 13px; color: #667eea; word-break: break-all; max-width: 400px; display: inline-block; }
+    .result-item .btn-copy { margin-left: 8px; padding: 4px 12px; background: #667eea; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .result-item .btn-copy:hover { background: #5568d3; }
+    .error { background: #fff0f0; border: 1px solid #ffccc; border-radius: 10px; padding: 12px 16px; color: #c0392b; font-size: 14px; margin-bottom: 16px; display: none; }
+    .error.show { display: block; }
+    .history-section { margin-top: 30px; }
+    .history-section h3 { font-size: 16px; color: #333; margin-bottom: 12px; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; }
+    .history-item { display: flex; align-items: center; padding: 10px; border-bottom: 1px solid #f0f0f0; }
+    .history-item img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; margin-right: 12px; }
+    .history-item .meta { flex: 1; }
+    .history-item .meta .name { font-size: 13px; color: #333; }
+    .history-item .meta .url { font-size: 11px; color: #999; font-family: monospace; }
+    .history-item .meta .time { font-size: 11px; color: #aaa; }
+    .history-item .btn-copy { padding: 4px 10px; background: #667eea; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; }
+    .btn-clear { margin-top: 10px; padding: 6px 14px; background: #e74c3c; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📤 图床上传工具</h1>
+      <p>图片上传到 GitHub 仓库 → 获取 raw.githubusercontent.com 公开 URL</p>
+    </div>
+    <div class="body">
+      <div class="token-section">
+        <label>🔑 GitHub Personal Access Token</label>
+        <input type="password" id="tokenInput" placeholder="ghp_xxxx 或 gho_xxxx（需 repo 权限）">
+        <div class="hint">Token 只存在你浏览器的 localStorage 中，不上传任何服务器。<br>
+        没有 Token？<a href="https://github.com/settings/tokens/new?scopes=repo" target="_blank">点这里创建</a>（勾选 repo 权限）</div>
+      </div>
+      <div class="upload-area" id="uploadArea">
+        <div class="icon">📁</div>
+        <div class="text">点击选择文件 或 拖拽图片到这里</div>
+        <div class="shortcut">Ctrl + V 粘贴图片 · 支持 JPG / PNG / GIF / WebP</div>
+        <input type="file" id="fileInput" accept="image/*" multiple style="display:none;">
+      </div>
+      <div class="progress" id="progress">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill">0%</div></div>
+      </div>
+      <div class="error" id="error"></div>
+      <div class="result" id="result"></div>
+      <div class="history-section">
+        <h3>📜 历史上传记录</h3>
+        <div id="historyList"></div>
+        <button class="btn-clear" id="btnClear" onclick="clearHistory()">🗑️ 清空记录</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const REPO_OWNER = 'Aron18';
+    const REPO_NAME = 'image-uploader';
+    const REPO_BRANCH = 'main';
+    const API_BASE = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents`;
+
+    // 加载已存 token 和历史
+    const tokenInput = document.getElementById('tokenInput');
+    tokenInput.value = localStorage.getItem('gh_token') || '';
+    tokenInput.addEventListener('change', () => {
+      localStorage.setItem('gh_token', tokenInput.value.trim());
+    });
+
+    const uploadArea = document.getElementById('uploadArea');
+    const fileInput = document.getElementById('fileInput');
+    const progress = document.getElementById('progress');
+    const progressFill = document.getElementById('progressFill');
+    const errorDiv = document.getElementById('error');
+    const resultDiv = document.getElementById('result');
+
+    // 点击上传
+    uploadArea.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+    // 拖拽
+    uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+    uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+    uploadArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadArea.classList.remove('dragover');
+      handleFiles(e.dataTransfer.files);
+    });
+
+    // 粘贴
+    document.addEventListener('paste', (e) => {
+      const items = e.clipboardData?.items || [];
+      const imgs = [];
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          if (blob) imgs.push(blob);
+        }
+      }
+      if (imgs.length) handleFiles(imgs);
+    });
+
+    function showError(msg) {
+      errorDiv.textContent = '❌ ' + msg;
+      errorDiv.classList.add('show');
+      setTimeout(() => errorDiv.classList.remove('show'), 8000);
+    }
+
+    async function handleFiles(files) {
+      const token = tokenInput.value.trim();
+      if (!token) { showError('请先输入 GitHub Token'); return; }
+      if (!files || !files.length) return;
+
+      progress.classList.add('show');
+      resultDiv.classList.add('show');
+      resultDiv.innerHTML = '';
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (!file.type.startsWith('image/')) continue;
+        const pct = Math.round(((i) / files.length) * 100);
+        progressFill.style.width = pct + '%';
+        progressFill.textContent = pct + '%';
+
+        try {
+          const url = await uploadFile(file, token);
+          addResult(file, url);
+          saveHistory(file, url);
+        } catch (e) {
+          showError(file.name + ': ' + e.message);
+        }
+      }
+      progressFill.style.width = '100%';
+      progressFill.textContent = '完成';
+      setTimeout(() => { progress.classList.remove('show'); progressFill.style.width = '0%'; }, 2000);
+      renderHistory();
+    }
+
+    async function uploadFile(file, token) {
+      const ts = Date.now();
+      const ext = file.name.match(/\.(png|jpe?g|gif|webp|bmp)$/i)?.[1]?.toLowerCase() || 'png';
+      const filename = `images/${ts}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+      const buf = await file.arrayBuffer();
+      const content = btoa(String.fromCharCode(...new Uint8Array(buf)));
+
+      const res = await fetch(`${API_BASE}/${filename}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: `upload: ${file.name}`,
+          content: content,
+          branch: REPO_BRANCH,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.message || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      // raw URL（直链，CDN 加速）
+      return `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${filename}`;
+    }
+
+    function addResult(file, url) {
+      const div = document.createElement('div');
+      div.className = 'result-item';
+      div.innerHTML = `
+        <img src="${url}" onerror="this.style.display='none'">
+        <div class="info">
+          <div style="font-size:13px;color:#333;margin-bottom:4px;">📄 ${file.name} (${(file.size/1024).toFixed(0)}KB)</div>
+          <div class="url">${url}</div>
+          <button class="btn-copy" onclick="copyUrl('${url}')">📋 复制</button>
+          <a href="${url}" target="_blank" style="margin-left:6px;font-size:12px;color:#667eea;text-decoration:none;">🔗 打开</a>
+        </div>
+      `;
+      resultDiv.appendChild(div);
+    }
+
+    function copyUrl(url) {
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = event.target;
+        const old = btn.textContent;
+        btn.textContent = '✅ 已复制';
+        setTimeout(() => btn.textContent = old, 1500);
+      });
+    }
+
+    // 历史记录
+    function saveHistory(file, url) {
+      const hist = JSON.parse(localStorage.getItem('upload_history') || '[]');
+      hist.unshift({
+        name: file.name,
+        size: file.size,
+        url: url,
+        time: new Date().toLocaleString('zh-CN'),
+      });
+      localStorage.setItem('upload_history', JSON.stringify(hist.slice(0, 50)));
+    }
+
+    function renderHistory() {
+      const hist = JSON.parse(localStorage.getItem('upload_history') || '[]');
+      const list = document.getElementById('historyList');
+      if (!hist.length) {
+        list.innerHTML = '<div style="color:#ccc;text-align:center;padding:20px;">暂无记录</div>';
+        return;
+      }
+      list.innerHTML = hist.map(h => `
+        <div class="history-item">
+          <img src="${h.url}" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22><rect fill=%22%23ddd%22 width=%2240%22 height=%2240%22/></svg>'">
+          <div class="meta">
+            <div class="name">${h.name} (${(h.size/1024).toFixed(0)}KB)</div>
+            <div class="url">${h.url}</div>
+            <div class="time">${h.time}</div>
+          </div>
+          <button class="btn-copy" onclick="copyUrl('${h.url}')">📋 复制</button>
+        </div>
+      `).join('');
+    }
+
+    function clearHistory() {
+      if (!confirm('确定清空所有历史记录？')) return;
+      localStorage.removeItem('upload_history');
+      renderHistory();
+    }
+
+    renderHistory();
+  </script>
+</body>
+</html>
