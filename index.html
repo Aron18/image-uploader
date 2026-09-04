@@ -43,7 +43,7 @@
     .history-section { margin-top: 30px; }
     .history-section h3 { font-size: 16px; color: #333; margin-bottom: 12px; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; }
     .history-item { display: flex; align-items: center; padding: 10px; border-bottom: 1px solid #f0f0f0; }
-    .history-item img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; margin-right: 12px; }
+    .history-item img { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; }
     .history-item .meta { flex: 1; }
     .history-item .meta .name { font-size: 13px; color: #333; }
     .history-item .meta .url { font-size: 11px; color: #999; font-family: monospace; }
@@ -350,8 +350,8 @@
       }
       list.innerHTML = hist.map((h, idx) => `
         <div class="history-item">
-          <a href="${h.url}" target="_blank" title="点击在新标签页打开">
-            <img src="${h.url}" style="cursor:pointer;" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22><rect fill=%22%23ddd%22 width=%2240%22 height=%2240%22/></svg>'">
+          <a href="${h.url}" target="_blank" rel="noopener" title="点击在新标签页打开" style="display:inline-block;text-decoration:none;cursor:pointer;">
+            <img src="${h.url}" style="width:40px;height:40px;object-fit:cover;border-radius:6px;margin-right:12px;cursor:pointer;" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22><rect fill=%22%23ddd%22 width=%2240%22 height=%2240%22/></svg>'">
           </a>
           <div class="meta">
             <div class="name">${h.name} (${(h.size/1024).toFixed(0)}KB)</div>
