@@ -134,6 +134,9 @@
       setTimeout(() => errorDiv.classList.remove('show'), 8000);
     }
 
+    const GITHUB_MAX = 100 * 1024 * 1024;  // GitHub Contents API 单文件上限 100MB
+    const COMPRESS_THRESHOLD = 5 * 1024 * 1024;  // 超过 5MB 自动压缩
+
     async function handleFiles(files) {
       const token = tokenInput.value.trim();
       if (!token) { showError('请先输入 GitHub Token'); return; }
@@ -146,16 +149,35 @@
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         if (!file.type.startsWith('image/')) continue;
+
+        // 100MB 硬限制（GitHub API）
+        if (file.size > GITHUB_MAX) {
+          showError(`${file.name} 超过 GitHub 100MB 限制（${(file.size/1024/1024).toFixed(1)}MB）`);
+          continue;
+        }
+
+        // 大图自动压缩（保持清晰度，显著减少体积）
+        let uploadFile = file;
+        if (file.size > COMPRESS_THRESHOLD) {
+          try {
+            const compressed = await compressImage(file, 2048, 0.85);
+            console.log(`[压缩] ${file.name}: ${(file.size/1024).toFixed(0)}KB → ${(compressed.size/1024).toFixed(0)}KB`);
+            uploadFile = compressed;
+          } catch (e) {
+            console.warn('[压缩失败，使用原图]', e.message);
+          }
+        }
+
         const pct = Math.round(((i) / files.length) * 100);
         progressFill.style.width = pct + '%';
         progressFill.textContent = pct + '%';
 
         try {
-          const url = await uploadFile(file, token);
-          addResult(file, url);
-          saveHistory(file, url);
+          const url = await uploadToGitHub(uploadFile, token);
+          addResult(uploadFile, url);
+          saveHistory(uploadFile, url);
         } catch (e) {
-          showError(file.name + ': ' + e.message);
+          showError(uploadFile.name + ': ' + e.message);
         }
       }
       progressFill.style.width = '100%';
@@ -164,13 +186,53 @@
       renderHistory();
     }
 
-    async function uploadFile(file, token) {
+    /**
+     * Canvas 前端压缩：等比缩到 maxDim（保留长宽比），输出 JPEG quality
+     * 比原 btoa+spread 快且不会爆栈
+     */
+    async function compressImage(file, maxDim = 2048, quality = 0.85) {
+      const img = await new Promise((res, rej) => {
+        const url = URL.createObjectURL(file);
+        const i = new Image();
+        i.onload = () => { URL.revokeObjectURL(url); res(i); };
+        i.onerror = rej;
+        i.src = url;
+      });
+      const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      return new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(new File([blob], file.name.replace(/\.\w+$/, '.jpg'), { type: 'image/jpeg' })), 'image/jpeg', quality);
+      });
+    }
+
+    /**
+     * 分块 base64 编码（解决 spread 对大图爆 call stack）
+     * 每次取 8KB 块，逐块转 String.fromCharCode 再 btoa
+     */
+    async function fileToBase64(file) {
+      const CHUNK = 8 * 1024;  // 8KB 每块
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let i = 0; i < buf.length; i += CHUNK) {
+        // slice 不会爆栈——每次只处理 8KB，函数参数远小于 65536 上限
+        binary += String.fromCharCode.apply(null, buf.subarray(i, i + CHUNK));
+      }
+      return btoa(binary);
+    }
+
+    async function uploadToGitHub(file, token) {
       const ts = Date.now();
       const ext = file.name.match(/\.(png|jpe?g|gif|webp|bmp)$/i)?.[1]?.toLowerCase() || 'png';
       const filename = `images/${ts}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
-      const buf = await file.arrayBuffer();
-      const content = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      console.log(`[upload] ${filename}, ${(file.size/1024).toFixed(0)}KB, 正在 base64...`);
+      const content = await fileToBase64(file);
 
       const res = await fetch(`${API_BASE}/${filename}`, {
         method: 'PUT',
