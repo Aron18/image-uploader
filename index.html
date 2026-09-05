@@ -432,38 +432,39 @@
     };
 
     /**
-     * 批量清空：GET images/ 目录全部文件 → 逐个 DELETE → 同步清理 localStorage 对应条目
-     * 删完对比 localStorage 里的 filename，只移除实际被删掉的，保留失败的供重试
+     * 批量清空：统计 images/ 和 keyframes/ 两个目录全部文件 → 逐个 DELETE → 服务端验证 → 同步清理 localStorage
+     * keyframes/ 存放 Agnes 视频工作室上传的首尾帧，清空时一并处理
      */
     window.clearAllFromGitHub = async function() {
       const token = localStorage.getItem('gh_token');
       if (!token) { showError('请先输入 GitHub Token'); return; }
 
-      // 先 GET 拿到仓库实际有多少张
-      let files;
-      try {
-        const res = await fetch(`${API_BASE}/images`, { headers: { Authorization: `Bearer ${token}` } });
-        if (res.status === 404) {
-          showSuccess('仓库里还没有图片');
+      // 统计 images/ 和 keyframes/ 两个目录（keyframes/ 存放视频工作室上传的首尾帧）
+      const DIRS = ['images', 'keyframes'];
+      const all = [];      // {dir, file}
+      const counts = {};
+      for (const dir of DIRS) {
+        try {
+          const res = await fetch(`${API_BASE}/${dir}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (res.status === 404) { counts[dir] = 0; continue; }   // 目录不存在 = 空
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const list = await res.json();
+          counts[dir] = Array.isArray(list) ? list.length : 0;
+          if (Array.isArray(list)) list.forEach(f => all.push({ dir, file: f }));
+        } catch (e) {
+          showError(`获取 ${dir}/ 目录失败: ` + e.message);
           return;
         }
-        if (!res.ok) throw new Error('获取目录列表失败: ' + res.status);
-        files = await res.json();
-        if (!Array.isArray(files) || !files.length) {
-          showSuccess('仓库里还没有图片');
-          return;
-        }
-      } catch (e) {
-        showError('获取仓库图片列表失败: ' + e.message);
-        return;
       }
 
-      if (!confirm(`仓库 images/ 目录共有 ${files.length} 张图片，确定全部删除？\n将从 GitHub 仓库永久删除，不可恢复。`)) return;
+      if (!all.length) { showSuccess('仓库为空（images/ 与 keyframes/ 都没有文件）'); return; }
+
+      if (!confirm(`仓库共有 ${all.length} 个文件（images/ ${counts.images} 张 + keyframes/ ${counts.keyframes} 张），确定全部删除？\n将从 GitHub 仓库永久删除，不可恢复。`)) return;
 
       const deletedNames = new Set();
       const failed = [];   // {name, reason}
       let done = 0;
-      for (const f of files) {
+      for (const { dir, file: f } of all) {
         let ok = false, lastErr = '';
         // 网络不稳时（代理吞响应）重试一次；404 视为成功（文件已不在=目的已达成）
         for (let attempt = 0; attempt < 2 && !ok; attempt++) {
@@ -484,36 +485,42 @@
           }
         }
         if (ok) { done++; deletedNames.add(f.name); }
-        else failed.push({ name: f.name, reason: lastErr });
+        else failed.push({ name: `${dir}/${f.name}`, reason: lastErr });
       }
 
       // 关键：以服务端实际状态为准。
       // 响应可能在传输中丢失（代理网络），但删除已生效——重新 GET 验证真实剩余。
       let remaining = null;
       try {
-        const verify = await fetch(`${API_BASE}/images`, { headers: { Authorization: `Bearer ${token}` } });
-        if (verify.ok) remaining = await verify.json();
-        else if (verify.status === 404) remaining = [];
+        const remainList = [];
+        for (const dir of DIRS) {
+          const res = await fetch(`${API_BASE}/${dir}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (res.ok) {
+            const list = await res.json();
+            if (Array.isArray(list)) list.forEach(f => remainList.push(`${dir}/${f.name}`));
+          } // 404 = 目录已消失，无剩余
+        }
+        remaining = remainList;
       } catch (e) { /* 验证失败时以逐个结果为准 */ }
 
-      // 同步清理 localStorage：移除"确认已不在仓库"的记录（已删除 + 原本就在列表里的）
-      const goneNames = remaining !== null
-        ? files.filter(f => !remaining.some(r => r.name === f.name)).map(f => f.name)
+      // 同步清理 localStorage：移除"确认已不在仓库 images/"的记录
+      const imagesGone = remaining !== null
+        ? all.filter(x => x.dir === 'images' && !remaining.includes(`images/${x.file.name}`)).map(x => x.file.name)
         : [...deletedNames];
       const hist = JSON.parse(localStorage.getItem('upload_history') || '[]');
       const keep = hist.filter(h => {
         const repoName = h.filename ? h.filename.split('/').pop() : null;
-        return !repoName || !goneNames.includes(repoName);
+        return !repoName || !imagesGone.includes(repoName);
       });
       localStorage.setItem('upload_history', JSON.stringify(keep));
       renderHistory();
 
       if (remaining !== null && remaining.length === 0) {
-        showSuccess(`清空完成：仓库 images/ 已全部删除（${files.length} 张）✅`);
-      } else if (remaining !== null && remaining.length < files.length) {
-        showSuccess(`清空部分完成：已删 ${files.length - remaining.length} 张，剩余 ${remaining.length} 张未成功（${failed.map(f => f.name).join('、') || '可点重试'}）`);
+        showSuccess(`清空完成：images/ 与 keyframes/ 已全部删除（共 ${all.length} 个文件）✅`);
+      } else if (remaining !== null && remaining.length < all.length) {
+        showSuccess(`清空部分完成：已删 ${all.length - remaining.length} 个，剩余 ${remaining.length} 个未成功（${failed.map(f => f.name).join('、') || '可点重试'}）`);
       } else if (done > 0) {
-        showSuccess(`清空完成：删除 ${done} 张${failed.length ? `，${failed.length} 张结果未知（网络响应丢失，可刷新核实）` : ''}`);
+        showSuccess(`清空完成：删除 ${done} 个${failed.length ? `，${failed.length} 个结果未知（网络响应丢失，可刷新核实）` : ''}`);
       } else {
         showError(`清空失败：${failed.map(f => `${f.name}（${f.reason}）`).join('；')}`);
       }
